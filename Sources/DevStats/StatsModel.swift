@@ -39,6 +39,9 @@ final class StatsModel {
 
   private(set) var mac = MachineState()
   private(set) var devbox = MachineState()
+  /// nil until the first fetch completes.
+  private(set) var limits: [AccountLimits]?
+  private(set) var limitsError: String?
 
   /// Poll fast and sample top processes only while someone is looking.
   private var isPanelOpen = false {
@@ -50,6 +53,7 @@ final class StatsModel {
   init() {
     Task { await pollMac() }
     Task { await pollDevbox() }
+    Task { await pollLimits() }
     Task {
       for await _ in NSWorkspace.shared.notificationCenter.notifications(named: NSWorkspace.didWakeNotification) {
         pollNow()
@@ -69,8 +73,26 @@ final class StatsModel {
     }
   }
 
-  var title: String {
-    "Mac \(percent(mac.stats?.memory)) · Dev \(devbox.error == nil ? percent(devbox.stats?.memory) : "–")"
+  var macMemory: String { percent(mac.stats?.memory.fraction) }
+
+  var devboxMemory: String { devbox.error == nil ? percent(devbox.stats?.memory.fraction) : "–" }
+
+  /// The menu bar title in words, for VoiceOver.
+  var accessibilityLabel: String {
+    var title = "Mac memory \(macMemory), devbox memory \(devboxMemory)"
+    if let claude = bestClaudeSession {
+      title += ", Claude 5-hour limit \(percent(claude))"
+    }
+    return title
+  }
+
+  /// The Claude account with the most room left in its 5-hour window.
+  var bestClaudeSession: Double? {
+    let now = Date.now
+    return limits?
+      .filter { $0.provider == .claude }
+      .compactMap { $0.windows.first { $0.span == "5h" }?.fraction(at: now) }
+      .min()
   }
 
   private func pollMac() async {
@@ -104,6 +126,24 @@ final class StatsModel {
     }
   }
 
+  /// Gentle on the private usage endpoints: once a minute while looking, every 5 minutes otherwise.
+  private func pollLimits() async {
+    while true {
+      do {
+        limits = try await LimitsSampler.fetch(host: devboxHost)
+        limitsError = nil
+      } catch {
+        logger.error("limits poll failed: \(String(describing: error), privacy: .public)")
+        limitsError = error is DecodingError ? "Unexpected response" : String(describing: error)
+      }
+      let fetched = Date.now
+      // Opening the panel cuts naps short; don't refetch more than every 30 seconds.
+      repeat {
+        await nap(isPanelOpen ? .seconds(60) : .seconds(300))
+      } while Date.now.timeIntervalSince(fetched) < 30
+    }
+  }
+
   /// A sleep that `pollNow()` cuts short.
   private func nap(_ duration: Duration) async {
     let nap = Task { _ = try? await Task.sleep(for: duration) }
@@ -115,10 +155,6 @@ final class StatsModel {
   private func pollNow() {
     naps.forEach { $0.cancel() }
   }
-}
-
-func percent(_ usage: Usage?) -> String {
-  usage.map { percent($0.fraction) } ?? "–"
 }
 
 func percent(_ fraction: Double?) -> String {

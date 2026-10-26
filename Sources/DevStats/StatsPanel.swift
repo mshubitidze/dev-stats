@@ -12,14 +12,19 @@ struct StatsPanel: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      // One grid for both machines so their columns line up.
-      Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
-        MachineRows(name: "Mac", state: model.mac)
-        Divider().padding(.vertical, 4)
-        MachineRows(name: "Devbox", state: model.devbox)
+      // Ticks every minute so reset countdowns stay current between fetches.
+      TimelineView(.everyMinute) { context in
+        // One grid for every section so their columns line up.
+        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+          MachineRows(name: "Mac", state: model.mac)
+          Divider().padding(.vertical, 4)
+          MachineRows(name: "Devbox", state: model.devbox)
+          Divider().padding(.vertical, 4)
+          LimitsRows(limits: model.limits, error: model.limitsError, now: context.date)
+        }
+        .font(.callout)
+        .monospacedDigit()
       }
-      .font(.callout)
-      .monospacedDigit()
       Divider()
       HStack {
         Toggle("Open at Login", isOn: $opensAtLogin)
@@ -55,25 +60,15 @@ private struct MachineRows: View {
   let state: MachineState
 
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 6) {
-      Text(name).font(.headline)
-      if let stats = state.stats {
-        Text("\(stats.cores) cores").detailStyle()
-      }
-      Spacer()
-      if let error = state.error {
-        Label(error, systemImage: "exclamationmark.triangle.fill")
-          .font(.caption)
-          .foregroundStyle(.orange)
-      }
-    }
+    SectionHeader(title: name, detail: state.stats.map { "\($0.cores) cores" }, error: state.error)
     if let stats = state.stats {
       Group {
         GridRow {
           Text("CPU")
           CPUChart(history: state.cpuHistory)
-          Text(stats.load.first.map { "load \($0.formatted(.number.precision(.fractionLength(2))))" } ?? "")
-            .help(stats.load.map { $0.formatted(.number.precision(.fractionLength(2))) }.joined(separator: " · "))
+          let load = stats.load.map { $0.formatted(.number.precision(.fractionLength(2))) }
+          Text(load.first.map { "load \($0)" } ?? "")
+            .help(load.joined(separator: " · "))
             .detailStyle()
             .gridColumnAlignment(.trailing)
           Text(percent(stats.cpu))
@@ -85,11 +80,7 @@ private struct MachineRows: View {
         }
         UsageRow(label: "Disk", usage: stats.disk, unit: .disk, tint: .forUsage(stats.disk.fraction))
         // Always present so the panel doesn't grow once the first list arrives.
-        // Full-width and unsized, so long names truncate instead of widening the grid.
-        Color.clear
-          .frame(height: 16)
-          .overlay(alignment: .leading) { TopProcesses(groups: stats.top ?? []) }
-          .gridCellUnsizedAxes(.horizontal)
+        TopProcesses(groups: stats.top ?? []).fullWidthRow()
       }
       .opacity(state.error == nil ? 1 : 0.5)
     } else if state.error == nil {
@@ -103,6 +94,87 @@ private struct MachineRows: View {
     case .warning: .orange
     case .critical: .red
     case nil: .forUsage(stats.memory.fraction)
+    }
+  }
+}
+
+private struct LimitsRows: View {
+  let limits: [AccountLimits]?
+  let error: String?
+  let now: Date
+
+  var body: some View {
+    SectionHeader(title: "Limits", detail: nil, error: error)
+    if let limits {
+      Group {
+        ForEach(limits) { account in
+          HStack(spacing: 6) {
+            Text(account.provider == .claude ? "Claude" : "Codex").fontWeight(.medium)
+            Text(account.name).foregroundStyle(.secondary)
+            Spacer()
+            if let error = account.error {
+              Text(error).font(.caption).foregroundStyle(.orange).lineLimit(1)
+            }
+          }
+          .fullWidthRow()
+          ForEach(account.windows, id: \.span) { window in
+            LimitRow(window: window, now: now)
+          }
+        }
+      }
+      .opacity(error == nil ? 1 : 0.5)
+    } else if error == nil {
+      ProgressView().controlSize(.small).frame(maxWidth: .infinity)
+    }
+  }
+}
+
+private struct LimitRow: View {
+  let window: LimitWindow
+  let now: Date
+
+  var body: some View {
+    let fraction = window.fraction(at: now)
+    GridRow {
+      Text(window.span)
+      ProgressView(value: fraction).tint(.forUsage(fraction))
+      Text(resetText).detailStyle()
+      Text(percent(fraction))
+    }
+  }
+
+  /// "in 1h 12m" within a day, otherwise "Sat 23:00".
+  private var resetText: String {
+    guard let resetsAt = window.resetsAt else { return "" }
+    let remaining = resetsAt.timeIntervalSince(now)
+    if remaining <= 0 {
+      return "reset"
+    }
+    if remaining < 86_400 {
+      let duration = Duration.seconds(max(remaining, 60))
+      return "in " + duration.formatted(.units(allowed: [.hours, .minutes], width: .narrow, maximumUnitCount: 2))
+    }
+    return resetsAt.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+  }
+}
+
+private struct SectionHeader: View {
+  let title: String
+  let detail: String?
+  let error: String?
+
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 6) {
+      Text(title).font(.headline)
+      if let detail {
+        Text(detail).detailStyle()
+      }
+      Spacer()
+      if let error {
+        Label(error, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.orange)
+      }
     }
   }
 }
@@ -205,5 +277,14 @@ private extension Color {
 private extension View {
   func detailStyle() -> some View {
     font(.caption).foregroundStyle(.secondary)
+  }
+
+  /// Spans the whole grid without widening it: an overlay can't affect layout, so long
+  /// content truncates to the width the columns leave.
+  func fullWidthRow() -> some View {
+    Color.clear
+      .frame(height: 16)
+      .overlay(alignment: .leading) { self }
+      .gridCellUnsizedAxes(.horizontal)
   }
 }

@@ -1,20 +1,10 @@
 import Foundation
 
 public enum LinuxSampler {
-  public enum Failure: Error, CustomStringConvertible {
-    case unreachable
-    case sshFailed(status: Int32)
-    case timedOut
-    case missing(String)
+  public struct ParseError: Error, CustomStringConvertible {
+    var field: String
 
-    public var description: String {
-      switch self {
-      case .unreachable: "Can't reach host"
-      case .sshFailed(let status): "ssh exited with status \(status)"
-      case .timedOut: "Timed out"
-      case .missing(let field): "Couldn't read \(field)"
-      }
-    }
+    public var description: String { "Couldn't read \(field)" }
   }
 
   /// Each section is preceded by a bare marker line so parsing doesn't depend on output shapes.
@@ -37,53 +27,9 @@ public enum LinuxSampler {
     return command
   }
 
-  /// Reuses one SSH connection across polls without touching ~/.ssh/config.
-  static let sshOptions = [
-    "-o", "BatchMode=yes",
-    "-o", "ConnectTimeout=5",
-    "-o", "ServerAliveInterval=5",
-    "-o", "ServerAliveCountMax=2",
-    "-o", "ControlMaster=auto",
-    "-o", "ControlPath=~/.ssh/devstats-%C",
-    "-o", "ControlPersist=10m",
-  ]
-
   @concurrent
   public static func snapshot(host: String, includeTop: Bool, timeout: Duration = .seconds(10)) async throws -> Snapshot {
-    try parse(try await ssh(host: host, command: command(includeTop: includeTop), timeout: timeout))
-  }
-
-  private static func ssh(host: String, command: String, timeout: Duration) async throws -> String {
-    let process = Process()
-    process.executableURL = URL(filePath: "/usr/bin/ssh")
-    process.arguments = sshOptions + [host, command]
-    let output = Pipe()
-    process.standardOutput = output
-    process.standardError = FileHandle.nullDevice
-    process.standardInput = FileHandle.nullDevice
-
-    let watchdog = Task {
-      try await Task.sleep(for: timeout)
-      process.terminate()
-    }
-    defer { watchdog.cancel() }
-
-    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-      process.terminationHandler = { _ in continuation.resume() }
-      do {
-        try process.run()
-      } catch {
-        continuation.resume(throwing: error)
-      }
-    }
-
-    switch (process.terminationReason, process.terminationStatus) {
-    case (.uncaughtSignal, _): throw Failure.timedOut
-    case (_, 0): break
-    case (_, 255): throw Failure.unreachable
-    case (_, let status): throw Failure.sshFailed(status: status)
-    }
-    return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    try parse(try await SSH.run(host: host, command: command(includeTop: includeTop), timeout: timeout))
   }
 
   public static func parse(_ output: String) throws -> Snapshot {
@@ -100,19 +46,19 @@ public enum LinuxSampler {
     }
     let sections = lines.mapValues { $0.map { $0.split(separator: " ") } }
 
-    guard let loadFields = sections["load"]?.first, loadFields.count >= 3 else { throw Failure.missing("load") }
+    guard let loadFields = sections["load"]?.first, loadFields.count >= 3 else { throw ParseError(field: "load") }
     let load = loadFields.prefix(3).compactMap { Double($0) }
 
     guard let coresField = sections["cores"]?.first?.first, let cores = Int(coresField) else {
-      throw Failure.missing("cores")
+      throw ParseError(field: "cores")
     }
 
     // cpu user nice system idle iowait irq softirq steal
     guard let stat = sections["stat"]?.first, stat.first == "cpu", stat.count >= 9 else {
-      throw Failure.missing("cpu")
+      throw ParseError(field: "cpu")
     }
     let jiffies = stat[1...8].compactMap { UInt64($0) }
-    guard jiffies.count == 8 else { throw Failure.missing("cpu") }
+    guard jiffies.count == 8 else { throw ParseError(field: "cpu") }
     let total = jiffies.reduce(0, +)
     let ticks = CPUTicks(busy: total - jiffies[3] - jiffies[4], total: total)
 
@@ -123,13 +69,13 @@ public enum LinuxSampler {
     guard
       let memTotal = meminfo["MemTotal"], let memAvailable = meminfo["MemAvailable"],
       let swapTotal = meminfo["SwapTotal"], let swapFree = meminfo["SwapFree"]
-    else { throw Failure.missing("meminfo") }
+    else { throw ParseError(field: "meminfo") }
 
     // Filesystem 1-blocks Used Available Capacity Mounted
     guard
       let df = sections["disk"]?.first, df.count >= 6,
       let diskTotal = Int64(df[1]), let diskAvailable = Int64(df[3])
-    else { throw Failure.missing("disk") }
+    else { throw ParseError(field: "disk") }
 
     let top = lines["top"]?.compactMap { line -> ProcessGroup? in
       let fields = line.split(separator: " ", maxSplits: 1)

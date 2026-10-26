@@ -62,7 +62,7 @@ struct LinuxSamplerTests {
   }
 
   @Test func `missing section throws`() {
-    #expect(throws: LinuxSampler.Failure.self) {
+    #expect(throws: LinuxSampler.ParseError.self) {
       try LinuxSampler.parse("load\n1 2 3 1/2 3\n")
     }
   }

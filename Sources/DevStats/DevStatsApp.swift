@@ -8,7 +8,7 @@ struct DevStatsApp: App {
     MenuBarExtra {
       StatsPanel(model: model)
     } label: {
-      Text(model.title).monospacedDigit()
+      MenuBarLabel(model: model)
     }
     .menuBarExtraStyle(.window)
   }
