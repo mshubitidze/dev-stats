@@ -1,6 +1,6 @@
 import Foundation
 
-public struct LimitWindow: Sendable, Equatable {
+public struct LimitWindow: Sendable, Equatable, Codable {
   /// Window length, e.g. "5h" or "7d".
   public var span: String
   public var fraction: Double
@@ -12,8 +12,8 @@ public struct LimitWindow: Sendable, Equatable {
   }
 }
 
-public struct AccountLimits: Sendable, Equatable, Identifiable {
-  public enum Provider: String, Sendable {
+public struct AccountLimits: Sendable, Equatable, Identifiable, Codable {
+  public enum Provider: String, Sendable, Codable {
     case claude, codex
   }
 
@@ -38,7 +38,7 @@ public struct AccountLimits: Sendable, Equatable, Identifiable {
 /// only the usage fields.
 public enum LimitsSampler {
   static let script = """
-    import glob, json, os, urllib.request
+    import glob, json, os, urllib.error, urllib.request
     from concurrent.futures import ThreadPoolExecutor
 
     ENDPOINTS = {
@@ -69,6 +69,8 @@ public enum LimitsSampler {
             with urllib.request.urlopen(request, timeout=8) as response:
                 usage = json.load(response)
             result["usage"] = {key: usage.get(key) for key in KEEP[provider]}
+        except urllib.error.HTTPError as error:
+            result["error"] = {401: "Signed out", 429: "Rate limited"}.get(error.code, f"HTTP {error.code}")
         except Exception as error:
             result["error"] = str(error)[:200]
         return result

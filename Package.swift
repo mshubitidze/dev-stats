@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
   name: "DevStats",
-  platforms: [.macOS(.v14)],
+  platforms: [.macOS(.v26)],
   targets: [
     .target(name: "DevStatsCore"),
     .executableTarget(

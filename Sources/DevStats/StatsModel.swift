@@ -126,21 +126,38 @@ final class StatsModel {
     }
   }
 
-  /// Gentle on the private usage endpoints: once a minute while looking, every 5 minutes otherwise.
+  /// The usage endpoints are private and rate limited, so limits refresh on a fixed schedule:
+  /// opening the panel doesn't refetch, and a relaunch reuses a recent result.
   private func pollLimits() async {
+    if let cache = LimitsCache.load() {
+      limits = cache.accounts
+      _ = try? await Task.sleep(for: .seconds(300 + cache.date.timeIntervalSinceNow))
+    }
     while true {
+      var interval = Duration.seconds(300)
       do {
-        limits = try await LimitsSampler.fetch(host: devboxHost)
+        let fetched = try await LimitsSampler.fetch(host: devboxHost)
+        // A failed account (often a transient rate limit) keeps its last known windows.
+        limits = fetched.map { account in
+          guard account.windows.isEmpty, let previous = limits?.first(where: { $0.id == account.id }) else {
+            return account
+          }
+          var account = account
+          account.windows = previous.windows
+          return account
+        }
         limitsError = nil
+        if fetched.contains(where: { $0.error == "Rate limited" }) {
+          interval = .seconds(900)
+        }
+        LimitsCache(date: .now, accounts: limits ?? []).save()
       } catch {
         logger.error("limits poll failed: \(String(describing: error), privacy: .public)")
         limitsError = error is DecodingError ? "Unexpected response" : String(describing: error)
       }
-      let fetched = Date.now
-      // Opening the panel cuts naps short; don't refetch more than every 30 seconds.
-      repeat {
-        await nap(isPanelOpen ? .seconds(60) : .seconds(300))
-      } while Date.now.timeIntervalSince(fetched) < 30
+      // Not a `nap`, so opening the panel doesn't cut it short. Task.sleep uses the continuous
+      // clock, which counts through system sleep, so a refresh that came due overnight runs on wake.
+      _ = try? await Task.sleep(for: interval)
     }
   }
 
@@ -154,6 +171,22 @@ final class StatsModel {
 
   private func pollNow() {
     naps.forEach { $0.cancel() }
+  }
+}
+
+/// The last limits fetch, kept across launches.
+private struct LimitsCache: Codable {
+  private static let key = "limitsCache"
+
+  var date: Date
+  var accounts: [AccountLimits]
+
+  static func load() -> LimitsCache? {
+    UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(LimitsCache.self, from: $0) }
+  }
+
+  func save() {
+    UserDefaults.standard.set(try? JSONEncoder().encode(self), forKey: Self.key)
   }
 }
 

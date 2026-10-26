@@ -11,7 +11,7 @@ struct StatsPanel: View {
   @State private var opensAtLogin = SMAppService.mainApp.status == .enabled
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 10) {
       // Ticks every minute so reset countdowns stay current between fetches.
       TimelineView(.everyMinute) { context in
         // One grid for every section so their columns line up.
@@ -22,22 +22,27 @@ struct StatsPanel: View {
           Divider().padding(.vertical, 4)
           LimitsRows(limits: model.limits, error: model.limitsError, now: context.date)
         }
-        .font(.callout)
         .monospacedDigit()
       }
-      Divider()
-      HStack {
-        Toggle("Open at Login", isOn: $opensAtLogin)
-          .toggleStyle(.checkbox)
-          .onChange(of: opensAtLogin) { _, enabled in setOpensAtLogin(enabled) }
-        Spacer()
-        Button("Quit") { NSApplication.shared.terminate(nil) }
+      .padding(.horizontal, 6)
+      Divider().padding(.horizontal, 6)
+      // Menu items, per the HIG: checkmark for a setting in effect, shortcut on the right.
+      VStack(spacing: 0) {
+        Button("Open at Login") {
+          opensAtLogin.toggle()
+          setOpensAtLogin(opensAtLogin)
+        }
+        .buttonStyle(MenuItemStyle(isChecked: opensAtLogin))
+        Button("Quit DevStats") { NSApplication.shared.terminate(nil) }
+          .buttonStyle(MenuItemStyle(shortcut: "⌘Q"))
           .keyboardShortcut("q")
       }
-      .font(.callout)
     }
-    .padding(14)
-    .frame(width: 360)
+    .padding(.horizontal, 8)
+    .padding(.top, 14)
+    .padding(.bottom, 6)
+    .frame(width: 380)
+    .glassEffect(.regular, in: .rect(cornerRadius: 16))
   }
 
   private func setOpensAtLogin(_ enabled: Bool) {
@@ -113,7 +118,7 @@ private struct LimitsRows: View {
             Text(account.name).foregroundStyle(.secondary)
             Spacer()
             if let error = account.error {
-              Text(error).font(.caption).foregroundStyle(.orange).lineLimit(1)
+              Text(error).font(.subheadline).foregroundStyle(.orange).lineLimit(1)
             }
           }
           .fullWidthRow()
@@ -172,7 +177,7 @@ private struct SectionHeader: View {
       Spacer()
       if let error {
         Label(error, systemImage: "exclamationmark.triangle.fill")
-          .font(.caption)
+          .font(.subheadline)
           .foregroundStyle(.orange)
       }
     }
@@ -260,7 +265,34 @@ private struct TopProcesses: View {
         .help(group.name)
       }
     }
-    .font(.caption)
+    .font(.subheadline)
+  }
+}
+
+/// A full-width menu item: a checkmark column, the title, an optional shortcut, and a hover highlight.
+private struct MenuItemStyle: ButtonStyle {
+  var isChecked = false
+  var shortcut: String?
+  @State private var isHovered = false
+
+  func makeBody(configuration: Configuration) -> some View {
+    HStack(spacing: 4) {
+      Image(systemName: "checkmark")
+        .fontWeight(.semibold)
+        .frame(width: 14)
+        .opacity(isChecked ? 1 : 0)
+      configuration.label
+      Spacer()
+      if let shortcut {
+        Text(shortcut).foregroundStyle(.secondary)
+      }
+    }
+    .padding(.horizontal, 6)
+    .frame(height: 24)
+    .contentShape(.rect)
+    .background(.primary.opacity(isHovered ? 0.1 : 0), in: .rect(cornerRadius: 6))
+    .opacity(configuration.isPressed ? 0.6 : 1)
+    .onHover { isHovered = $0 }
   }
 }
 
@@ -276,7 +308,7 @@ private extension Color {
 
 private extension View {
   func detailStyle() -> some View {
-    font(.caption).foregroundStyle(.secondary)
+    font(.subheadline).foregroundStyle(.secondary)
   }
 
   /// Spans the whole grid without widening it: an overlay can't affect layout, so long
