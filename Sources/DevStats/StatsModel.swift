@@ -126,15 +126,16 @@ final class StatsModel {
     }
   }
 
-  /// The usage endpoints are private and rate limited, so limits refresh on a fixed schedule:
-  /// opening the panel doesn't refetch, and a relaunch reuses a recent result.
+  /// The usage endpoints are private and rate limited per account, and other clients (T3 Code,
+  /// Claude Code) poll the same accounts. Bursts trip the limit, so limits refresh on a slow
+  /// fixed schedule: opening the panel doesn't refetch, and a relaunch reuses a recent result.
   private func pollLimits() async {
     if let cache = LimitsCache.load() {
       limits = cache.accounts
-      _ = try? await Task.sleep(for: .seconds(300 + cache.date.timeIntervalSinceNow))
+      _ = try? await Task.sleep(for: .seconds(600 + cache.date.timeIntervalSinceNow))
     }
     while true {
-      var interval = Duration.seconds(300)
+      var interval = Duration.seconds(600)
       do {
         let fetched = try await LimitsSampler.fetch(host: devboxHost)
         // A failed account (often a transient rate limit) keeps its last known windows.
@@ -148,7 +149,7 @@ final class StatsModel {
         }
         limitsError = nil
         if fetched.contains(where: { $0.error == "Rate limited" }) {
-          interval = .seconds(900)
+          interval = .seconds(1800)
         }
         LimitsCache(date: .now, accounts: limits ?? []).save()
       } catch {
