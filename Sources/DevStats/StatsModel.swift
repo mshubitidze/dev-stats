@@ -155,6 +155,10 @@ final class StatsModel {
       } catch {
         logger.error("limits poll failed: \(String(describing: error), privacy: .public)")
         limitsError = error is DecodingError ? "Unexpected response" : String(describing: error)
+        // Usually the network isn't back yet after wake; the request never reached the provider.
+        if case SSHError.unreachable = error {
+          interval = .seconds(60)
+        }
       }
       // Not a `nap`, so opening the panel doesn't cut it short. Task.sleep uses the continuous
       // clock, which counts through system sleep, so a refresh that came due overnight runs on wake.
