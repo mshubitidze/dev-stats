@@ -42,6 +42,9 @@ final class StatsModel {
   /// nil until the first fetch completes.
   private(set) var limits: [AccountLimits]?
   private(set) var limitsError: String?
+  /// nil until the first fetch completes.
+  private(set) var pool: PoolStatus?
+  private(set) var poolError: String?
 
   /// Poll fast and sample top processes only while someone is looking.
   private var isPanelOpen = false {
@@ -54,6 +57,7 @@ final class StatsModel {
     Task { await pollMac() }
     Task { await pollDevbox() }
     Task { await pollLimits() }
+    Task { await pollPool() }
     Task {
       for await _ in NSWorkspace.shared.notificationCenter.notifications(named: NSWorkspace.didWakeNotification) {
         pollNow()
@@ -123,6 +127,20 @@ final class StatsModel {
       case (false, true): await nap(.seconds(5))
       case (false, false): await nap(.seconds(30))
       }
+    }
+  }
+
+  /// Only the panel shows the pool, so it refreshes slowly while closed.
+  private func pollPool() async {
+    while true {
+      do {
+        pool = try await SimulatorsSampler.fetch(host: devboxHost)
+        poolError = nil
+      } catch {
+        logger.error("pool poll failed: \(String(describing: error), privacy: .public)")
+        poolError = error is DecodingError ? "Unexpected response" : String(describing: error)
+      }
+      await nap(isPanelOpen ? .seconds(3) : .seconds(30))
     }
   }
 

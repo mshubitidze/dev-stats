@@ -20,6 +20,8 @@ struct StatsPanel: View {
           Divider().padding(.vertical, 4)
           MachineRows(name: "Devbox", state: model.devbox)
           Divider().padding(.vertical, 4)
+          SimulatorsRows(pool: model.pool, error: model.poolError, now: context.date)
+          Divider().padding(.vertical, 4)
           LimitsRows(limits: model.limits, error: model.limitsError, now: context.date)
         }
         .monospacedDigit()
@@ -131,6 +133,70 @@ private struct LimitsRows: View {
     } else if error == nil {
       ProgressView().controlSize(.small).frame(maxWidth: .infinity)
     }
+  }
+}
+
+/// The Simlock pool across both workers: one line per device, leased ones first.
+private struct SimulatorsRows: View {
+  let pool: PoolStatus?
+  let error: String?
+  let now: Date
+
+  var body: some View {
+    SectionHeader(title: "Simulators", detail: detail, error: error ?? offline)
+    if let pool {
+      Group {
+        if pool.devices.isEmpty {
+          Text("None running").detailStyle().fullWidthRow()
+        }
+        ForEach(pool.devices) { device in
+          HStack(spacing: 6) {
+            Text(device.model).fontWeight(device.leasedAt == nil ? .regular : .medium).lineLimit(1)
+            Text(device.version).foregroundStyle(.secondary).fixedSize()
+            Spacer()
+            Text([device.holder ?? status(device), device.worker].joined(separator: " · "))
+              .detailStyle()
+              .lineLimit(1)
+              .truncationMode(.middle)
+            if let leasedAt = device.leasedAt {
+              Text(elapsed(since: leasedAt)).detailStyle().fixedSize()
+            }
+          }
+          .opacity(device.leasedAt == nil ? 0.6 : 1)
+          .help(device.holder.map { "Leased by \($0)" } ?? status(device))
+          .fullWidthRow()
+        }
+      }
+      .opacity(error == nil ? 1 : 0.5)
+    } else if error == nil {
+      ProgressView().controlSize(.small).frame(maxWidth: .infinity)
+    }
+  }
+
+  /// "2 in use · 1 waiting".
+  private var detail: String? {
+    guard let pool else { return nil }
+    var parts = ["\(pool.devices.count { $0.leasedAt != nil }) in use"]
+    if pool.waiting > 0 {
+      parts.append("\(pool.waiting) waiting")
+    }
+    return parts.joined(separator: " · ")
+  }
+
+  private var offline: String? {
+    guard let workers = pool?.offlineWorkers, !workers.isEmpty else { return nil }
+    return "\(workers.joined(separator: ", ")) offline"
+  }
+
+  /// A free booted device is "idle"; anything else is mid-transition, in Simlock's words.
+  private func status(_ device: PoolDevice) -> String {
+    device.state == "ready" ? "idle" : device.state
+  }
+
+  /// "12m" or "1h 5m".
+  private func elapsed(since date: Date) -> String {
+    Duration.seconds(max(now.timeIntervalSince(date), 60))
+      .formatted(.units(allowed: [.hours, .minutes], width: .narrow, maximumUnitCount: 2))
   }
 }
 
